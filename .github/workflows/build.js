@@ -1,30 +1,32 @@
 import { mkdir, copyFile, writeFile, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import path from 'path';
+
+// Debug — show what's in node_modules/@echogarden/dectalk-wasm
+const dtBase = 'node_modules/@echogarden/dectalk-wasm';
+
+console.log('Checking if package exists:', existsSync(dtBase));
+
+if (existsSync(dtBase)) {
+  console.log('Root contents:', readdirSync(dtBase));
+  if (existsSync(path.join(dtBase, 'lib'))) {
+    console.log('lib contents:', readdirSync(path.join(dtBase, 'lib')));
+  } else {
+    console.log('No lib folder found');
+  }
+  if (existsSync(path.join(dtBase, 'wasm'))) {
+    console.log('wasm contents:', readdirSync(path.join(dtBase, 'wasm')));
+  } else {
+    console.log('No wasm folder found');
+  }
+} else {
+  console.log('Package not found at all!');
+}
 
 // Create dist folder
 await mkdir('dist', { recursive: true });
 
-// Copy the dectalk wasm and js files from node_modules
-const dtBase = 'node_modules/@echogarden/dectalk-wasm';
-
-const filesToCopy = [
-  'lib/dectalk.js',
-  'lib/dectalk.wasm',
-];
-
-for (const f of filesToCopy) {
-  const src = path.join(dtBase, f);
-  const dest = path.join('dist', path.basename(f));
-  if (existsSync(src)) {
-    await copyFile(src, dest);
-    console.log(`Copied: ${f} → dist/${path.basename(f)}`);
-  } else {
-    console.warn(`Not found: ${src}`);
-  }
-}
-
-// Copy index.html into dist
+// Copy index.html into dist as a sanity check
 await copyFile('index.html', 'dist/index.html');
 console.log('Copied index.html → dist/index.html');
 
