@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mount Holly Weather Radio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: #0a0f1a;
+      color: #00ff88;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 1.1rem;
+      letter-spacing: 0.2em;
+      color: #00ccff;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 0.75rem;
+      color: #447766;
+      letter-spacing: 0.15em;
+      margin-bottom: 32px;
+    }
+
+    .radio-box {
+      background: #0d1a14;
+      border: 1px solid #00ff8844;
+      border-radius: 12px;
+      padding: 28px;
+      width: 100%;
+      max-width: 540px;
+    }
+
+    .status-line {
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      color: #447766;
+      margin-bottom: 16px;
+      min-height: 18px;
+    }
+
+    .status-line.active { color: #00ff88; }
+    .status-line.alert  { color: #ffaa00; }
+    .status-line.error  { color: #ff4444; }
+
+    #transcript {
+      background: #060e08;
+      border: 1px solid #00ff8822;
+      border-radius: 8px;
+      padding: 16px;
+      min-height: 120px;
+      max-height: 260px;
+      overflow-y: auto;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: #88ffbb;
+      margin-bottom: 24px;
+      white-space: pre-wrap;
+    }
+
+    .buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    button {
+      background: #0d1a14;
+      border: 1px solid #00ff8866;
+      border-radius: 8px;
+      color: #00ff88;
+      font-family: monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      padding: 12px 8px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    button:hover  { background: #142b1e; border-color: #00ff88; }
+    button:active { background: #1a3a28; }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    #btn-all {
+      grid-column: 1 / -1;
+      font-size: 0.85rem;
+      padding: 14px;
+      border-color: #00ccff88;
+      color: #00ccff;
+    }
+    #btn-all:hover { background: #0d1e2b; border-color: #00ccff; }
+
+    .stop-btn {
+      grid-column: 1 / -1;
+      border-color: #ff444466;
+      color: #ff6666;
+    }
+    .stop-btn:hover { background: #1a0d0d; border-color: #ff4444; }
+
+    .alert-banner {
+      display: none;
+      background: #1a0d00;
+      border: 1px solid #ffaa0088;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      color: #ffaa00;
+      margin-bottom: 16px;
+      letter-spacing: 0.05em;
+    }
+
+    .cycle-info {
+      font-size: 0.7rem;
+      color: #334455;
+      text-align: center;
+      margin-top: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    .cycle-info span { color: #00ccff88; }
+
+    #dectalk-status {
+      font-size: 0.7rem;
+      color: #334455;
+      text-align: center;
+      margin-bottom: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    #dectalk-status.ready  { color: #00ff8877; }
+    #dectalk-status.error  { color: #ff444477; }
+  </style>
+</head>
+<body>
+
+  <h1>&#x25A0; NWS Weather Radio</h1>
+  <div class="subtitle">KIH28 — MOUNT HOLLY, NJ &nbsp;|&nbsp; NJZ015/016/017</div>
+
+  <div class="radio-box">
+    <div id="alert-banner" class="alert-banner"></div>
+    <div id="dectalk-status">LOADING DECTALK ENGINE...</div>
+    <div id="status" class="status-line">INITIALIZING...</div>
+    <div id="transcript">Starting weather radio broadcast...</div>
+
+    <div class="buttons">
+      <button id="btn-all"      onclick="manualSpeak('all')"      disabled>&#x25B6; Full Broadcast</button>
+      <button id="btn-alerts"   onclick="manualSpeak('alerts')"   disabled>Alerts</button>
+      <button id="btn-current"  onclick="manualSpeak('current')"  disabled>Current</button>
+      <button id="btn-forecast" onclick="manualSpeak('forecast')" disabled>Forecast</button>
+      <button class="stop-btn"  onclick="stopSpeech()">&#x25A0; Stop</button>
+    </div>
+
+    <div id="cycle-info" class="cycle-info">
+      AUTO-BROADCAST &nbsp;|&nbsp; NEXT CYCLE IN <span id="countdown">--:--</span>
+    </div>
+  </div>
+
+  <!-- DECtalk WebAssembly from dectalk.de -->
+  <script src="https://dectalk.de/js/dectalk.js"></script>
+
+<script>
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxB2X7tWZt1u0bCrrjU2Azy0PN37mUftKafRm7357rkK_cag3g_jwSYdTRvQ-bnCn6s/exec";
+  const BROADCAST_INTERVAL = 5;
+  const DISCLAIMER = "This is a fanmade NOAA weather radio, broadcasting off of Google Apps Script. " +
+    "Please remember that this is not related to the National Weather Service, or the National Oceanic and Atmospheric Administration. " +
+    "Thank you for listening. ";
+
+  let isSpeaking = false;
+  let autoTimer = null;
+  let countdownTimer = null;
+  let secondsUntilNext = 0;
+  let userStopped = false;
+  let dtReady = false;
+  let audioCtx = null;
+
+  // ── DECtalk init ──────────────────────────────────────────────────────────
+  function initDectalk() {
+    if (typeof makeDectalk === 'undefined') {
+      setDectalkStatus('DECTALK FAILED TO LOAD — USING FALLBACK VOICE', 'error');
+      dtReady = false;
+      enableButtons();
+      return;
+    }
+
+    makeDectalk().then(function(dt) {
+      window._dt = dt;
+      dtReady = true;
+      setDectalkStatus('DECTALK ENGINE READY', 'ready');
+      enableButtons();
+      setStatus('CLICK ANYWHERE TO START', 'active');
+      setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
+      document.addEventListener('click', startOnInteraction);
+      document.addEventListener('keydown', startOnInteraction);
+    }).catch(function(err) {
+      console.warn('DECtalk failed to init:', err);
+      dtReady = false;
+      setDectalkStatus('DECTALK UNAVAILABLE — USING FALLBACK VOICE', 'error');
+      enableButtons();
+      setStatus('CLICK ANYWHERE TO START', 'active');
+      setTranscript('Weather radio ready. Click anywhere on the page to begin.');
+      document.addEventListener('click', startOnInteraction);
+      document.addEventListener('keydown', startOnInteraction);
+    });
+  }
+
+  // ── DECtalk speak ─────────────────────────────────────────────────────────
+  function speakWithDectalk(text, onDone) {
+    if (!dtReady || !window._dt) {
+      speakWithFallback(text, onDone);
+      return;
+    }
+
+    try {
+      // DECtalk returns a WAV buffer
+      const wav = window._dt.speak(text, {
+        voice: 'Paul',  // classic Paul voice — most like real NOAA
+        rate: 150,
+      });
+
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      audioCtx.decodeAudioData(wav.buffer, function(decoded) {
+        const source = audioCtx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(audioCtx.destination);
+        source.onended = function() {
+          isSpeaking = false;
+          setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
+          setButtons(false);
+          if (onDone) onDone();
+        };
+        source.start(0);
+      }, function(err) {
+        console.warn('DECtalk audio decode failed, falling back:', err);
+        speakWithFallback(text, onDone);
+      });
+
+    } catch(err) {
+      console.warn('DECtalk speak failed, falling back:', err);
+      speakWithFallback(text, onDone);
+    }
+  }
+
+  // ── Fallback browser TTS ──────────────────────────────────────────────────
+  function speakWithFallback(text, onDone) {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+    let index = 0;
+
+    function speakNext() {
+      if (index >= sentences.length) {
+        isSpeaking = false;
+        setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
+        setButtons(false);
+        if (onDone) onDone();
+        return;
+      }
+      const chunk = sentences[index].trim();
+      index++;
+      if (!chunk) { speakNext(); return; }
+
+      const utt = new SpeechSynthesisUtterance(chunk);
+      utt.rate = 0.92;
+      utt.pitch = 0.85;
+      utt.volume = 1.0;
+
+      const voices = synth.getVoices();
+      const preferred = voices.find(v => v.lang === 'en-US' && v.name.includes('Google'))
+                     || voices.find(v => v.lang === 'en-US')
+                     || voices[0];
+      if (preferred) utt.voice = preferred;
+
+      utt.onend = speakNext;
+      utt.onerror = (e) => {
+        if (e.error !== 'interrupted') speakNext();
+      };
+      synth.speak(utt);
+    }
+
+    speakNext();
+  }
+
+  // ── UI helpers ────────────────────────────────────────────────────────────
+  function setDectalkStatus(msg, cls) {
+    const el = document.getElementById('dectalk-status');
+    el.textContent = msg;
+    el.className = cls || '';
+  }
+
+  function setStatus(msg, cls) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = 'status-line' + (cls ? ' ' + cls : '');
+  }
+
+  function setTranscript(text) {
+    const el = document.getElementById('transcript');
+    el.textContent = text;
+    el.scrollTop = 0;
+  }
+
+  function setButtons(disabled) {
+    document.querySelectorAll('button:not(.stop-btn)').forEach(b => b.disabled = disabled);
+  }
+
+  function enableButtons() {
+    setButtons(false);
+  }
+
+  function stopSpeech() {
+    if (audioCtx) audioCtx.close().then(() => { audioCtx = null; });
+    window.speechSynthesis.cancel();
+    isSpeaking = false;
+    userStopped = true;
+    clearTimeout(autoTimer);
+    clearInterval(countdownTimer);
+    document.getElementById('countdown').textContent = 'PAUSED';
+    setStatus('STOPPED — Press a button to resume', '');
+    setButtons(false);
+  }
+
+  function showAlertBanner(alerts) {
+    const banner = document.getElementById('alert-banner');
+    if (alerts && alerts.length > 0) {
+      banner.textContent = '⚠ ACTIVE ALERT: ' + alerts.map(a => a.event).join(' | ');
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
+  function startCountdown(seconds) {
+    clearInterval(countdownTimer);
+    secondsUntilNext = seconds;
+    updateCountdownDisplay();
+    countdownTimer = setInterval(function() {
+      secondsUntilNext--;
+      if (secondsUntilNext <= 0) clearInterval(countdownTimer);
+      updateCountdownDisplay();
+    }, 1000);
+  }
+
+  function updateCountdownDisplay() {
+    const m = Math.floor(secondsUntilNext / 60);
+    const s = secondsUntilNext % 60;
+    document.getElementById('countdown').textContent =
+      String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
+  function scheduleNext() {
+    clearTimeout(autoTimer);
+    startCountdown(BROADCAST_INTERVAL);
+    autoTimer = setTimeout(function() {
+      if (!userStopped) autoBroadcast();
+    }, BROADCAST_INTERVAL * 1000);
+  }
+
+  // ── Weather fetch ─────────────────────────────────────────────────────────
+  function fetchWeather(type) {
+    return fetch(SCRIPT_URL + '?type=' + type)
+      .then(r => r.json());
+  }
+
+  // ── Broadcast logic ───────────────────────────────────────────────────────
+  function runBroadcast(type, onDone) {
+    isSpeaking = true;
+    setButtons(true);
+    setStatus('FETCHING DATA...', 'active');
+    setTranscript('Contacting National Weather Service...');
+
+    fetchWeather(type).then(function(data) {
+      if (data.error) throw new Error(data.error);
+
+      let fullText = '';
+
+      if (type === 'all') {
+        showAlertBanner(data.alerts ? data.alerts.alerts : []);
+        fullText = DISCLAIMER + "Mount Holly, New Jersey. ";
+        if (data.current  && data.current.tts)  fullText += data.current.tts  + " ";
+        if (data.alerts   && data.alerts.tts)   fullText += data.alerts.tts   + " ";
+        if (data.forecast && data.forecast.tts) fullText += data.forecast.tts;
+      } else {
+        if (type === 'alerts') showAlertBanner(data.alerts);
+        fullText = DISCLAIMER + (data.tts || "No information available.");
+      }
+
+      setTranscript(fullText);
+      setStatus('BROADCASTING...', 'active');
+      speakWithDectalk(fullText, onDone);
+
+    }).catch(function(err) {
+      setStatus('ERROR: ' + err.message, 'error');
+      setTranscript('Failed to retrieve weather data.\n\n' + err.message);
+      setButtons(false);
+      isSpeaking = false;
+      if (onDone) onDone();
+    });
+  }
+
+  function autoBroadcast() {
+    userStopped = false;
+    runBroadcast('all', function() { scheduleNext(); });
+  }
+
+  function manualSpeak(type) {
+    userStopped = false;
+    if (audioCtx) { audioCtx.close().then(() => { audioCtx = null; }); }
+    window.speechSynthesis.cancel();
+    clearTimeout(autoTimer);
+    clearInterval(countdownTimer);
+    runBroadcast(type, function() { scheduleNext(); });
+  }
+
+  // ── Start on interaction ──────────────────────────────────────────────────
+  let started = false;
+  function startOnInteraction() {
+    if (started) return;
+    started = true;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    autoBroadcast();
+    document.removeEventListener('click', startOnInteraction);
+    document.removeEventListener('keydown', startOnInteraction);
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  window.addEventListener('load', function() {
+    initDectalk();
+  });
+
+  window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
+</script>
+</body>
+</html>
