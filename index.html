@@ -191,7 +191,7 @@
   function initMeSpeak() {
     try {
       meSpeak.loadConfig(); // no-op in v2.0+, kept for safety
-      meSpeak.loadVoice('mespeak/voices/en/en-us.json', function(success) {
+      meSpeak.loadVoice('voices/en/en-us.json', function(success) {
         if (success) {
           meSpeakReady = true;
           setEngineStatus('SPEECH ENGINE READY', 'ready');
@@ -241,7 +241,6 @@
       });
 
       if (!currentSpeechId) {
-        // speak() returned 0 — failed immediately
         speakWithFallback(text, onDone);
       }
     } catch (err) {
