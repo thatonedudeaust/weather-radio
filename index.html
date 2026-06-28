@@ -143,6 +143,7 @@
 
     #dectalk-status.ready  { color: #00ff8877; }
     #dectalk-status.error  { color: #ff444477; }
+    #dectalk-status.loading { color: #ffaa0077; }
   </style>
 </head>
 <body>
@@ -152,7 +153,7 @@
 
   <div class="radio-box">
     <div id="alert-banner" class="alert-banner"></div>
-    <div id="dectalk-status">LOADING DECTALK ENGINE...</div>
+    <div id="dectalk-status" class="loading">WAKING UP DECTALK SERVER...</div>
     <div id="status" class="status-line">INITIALIZING...</div>
     <div id="transcript">Starting weather radio broadcast...</div>
 
@@ -169,11 +170,9 @@
     </div>
   </div>
 
-  <!-- DECtalk WebAssembly from dectalk.de -->
-  <script src="https://dectalk.de/js/dectalk.js"></script>
-
 <script>
   const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxB2X7tWZt1u0bCrrjU2Azy0PN37mUftKafRm7357rkK_cag3g_jwSYdTRvQ-bnCn6s/exec";
+  const TTS_SERVER_URL = "https://weather-radio-tts.onrender.com";
   const BROADCAST_INTERVAL = 5;
   const DISCLAIMER = "This is a fanmade NOAA weather radio, broadcasting off of Google Apps Script. " +
     "Please remember that this is not related to the National Weather Service, or the National Oceanic and Atmospheric Administration. " +
@@ -184,75 +183,71 @@
   let countdownTimer = null;
   let secondsUntilNext = 0;
   let userStopped = false;
-  let dtReady = false;
-  let audioCtx = null;
+  let ttsServerReady = false;
+  let currentAudio = null;
 
-  // ── DECtalk init ──────────────────────────────────────────────────────────
-  function initDectalk() {
-    if (typeof makeDectalk === 'undefined') {
-      setDectalkStatus('DECTALK FAILED TO LOAD — USING FALLBACK VOICE', 'error');
-      dtReady = false;
-      enableButtons();
-      return;
-    }
-
-    makeDectalk().then(function(dt) {
-      window._dt = dt;
-      dtReady = true;
-      setDectalkStatus('DECTALK ENGINE READY', 'ready');
-      enableButtons();
-      setStatus('CLICK ANYWHERE TO START', 'active');
-      setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
-      document.addEventListener('click', startOnInteraction);
-      document.addEventListener('keydown', startOnInteraction);
-    }).catch(function(err) {
-      console.warn('DECtalk failed to init:', err);
-      dtReady = false;
-      setDectalkStatus('DECTALK UNAVAILABLE — USING FALLBACK VOICE', 'error');
-      enableButtons();
-      setStatus('CLICK ANYWHERE TO START', 'active');
-      setTranscript('Weather radio ready. Click anywhere on the page to begin.');
-      document.addEventListener('click', startOnInteraction);
-      document.addEventListener('keydown', startOnInteraction);
-    });
+  // ── Wake up the Render server (free tier sleeps after inactivity) ──────────
+  function pingTTSServer() {
+    setDectalkStatus('WAKING UP DECTALK SERVER...', 'loading');
+    fetch(TTS_SERVER_URL)
+      .then(r => {
+        if (r.ok) {
+          ttsServerReady = true;
+          setDectalkStatus('DECTALK SERVER READY', 'ready');
+        } else {
+          throw new Error('Server returned ' + r.status);
+        }
+      })
+      .catch(err => {
+        console.warn('TTS server not ready yet:', err);
+        ttsServerReady = false;
+        setDectalkStatus('DECTALK SERVER UNAVAILABLE — USING FALLBACK VOICE', 'error');
+      })
+      .finally(() => {
+        enableButtons();
+        setStatus('CLICK ANYWHERE TO START', 'active');
+        setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
+        document.addEventListener('click', startOnInteraction);
+        document.addEventListener('keydown', startOnInteraction);
+      });
   }
 
-  // ── DECtalk speak ─────────────────────────────────────────────────────────
+  // ── DECtalk speak via Render server ─────────────────────────────────────
   function speakWithDectalk(text, onDone) {
-    if (!dtReady || !window._dt) {
+    if (!ttsServerReady) {
       speakWithFallback(text, onDone);
       return;
     }
 
-    try {
-      // DECtalk returns a WAV buffer
-      const wav = window._dt.speak(text, {
-        voice: 'Paul',  // classic Paul voice — most like real NOAA
-        rate: 150,
-      });
-
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-      audioCtx.decodeAudioData(wav.buffer, function(decoded) {
-        const source = audioCtx.createBufferSource();
-        source.buffer = decoded;
-        source.connect(audioCtx.destination);
-        source.onended = function() {
+    fetch(TTS_SERVER_URL + '/speak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    })
+      .then(r => {
+        if (!r.ok) throw new Error('TTS server error ' + r.status);
+        return r.blob();
+      })
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        currentAudio = new Audio(url);
+        currentAudio.onended = () => {
+          URL.revokeObjectURL(url);
           isSpeaking = false;
           setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
           setButtons(false);
           if (onDone) onDone();
         };
-        source.start(0);
-      }, function(err) {
-        console.warn('DECtalk audio decode failed, falling back:', err);
+        currentAudio.onerror = () => {
+          console.warn('Audio playback failed, falling back');
+          speakWithFallback(text, onDone);
+        };
+        currentAudio.play();
+      })
+      .catch(err => {
+        console.warn('DECtalk server failed, falling back:', err);
         speakWithFallback(text, onDone);
       });
-
-    } catch(err) {
-      console.warn('DECtalk speak failed, falling back:', err);
-      speakWithFallback(text, onDone);
-    }
   }
 
   // ── Fallback browser TTS ──────────────────────────────────────────────────
@@ -323,7 +318,10 @@
   }
 
   function stopSpeech() {
-    if (audioCtx) audioCtx.close().then(() => { audioCtx = null; });
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
     window.speechSynthesis.cancel();
     isSpeaking = false;
     userStopped = true;
@@ -419,7 +417,7 @@
 
   function manualSpeak(type) {
     userStopped = false;
-    if (audioCtx) { audioCtx.close().then(() => { audioCtx = null; }); }
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
     window.speechSynthesis.cancel();
     clearTimeout(autoTimer);
     clearInterval(countdownTimer);
@@ -431,7 +429,6 @@
   function startOnInteraction() {
     if (started) return;
     started = true;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     autoBroadcast();
     document.removeEventListener('click', startOnInteraction);
     document.removeEventListener('keydown', startOnInteraction);
@@ -439,7 +436,7 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────────
   window.addEventListener('load', function() {
-    initDectalk();
+    pingTTSServer();
   });
 
   window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
