@@ -132,6 +132,17 @@
     }
 
     .cycle-info span { color: #00ccff88; }
+
+    #engine-status {
+      font-size: 0.7rem;
+      color: #334455;
+      text-align: center;
+      margin-bottom: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    #engine-status.ready  { color: #00ff8877; }
+    #engine-status.error  { color: #ff444477; }
   </style>
 </head>
 <body>
@@ -141,14 +152,15 @@
 
   <div class="radio-box">
     <div id="alert-banner" class="alert-banner"></div>
+    <div id="engine-status">LOADING SPEECH ENGINE...</div>
     <div id="status" class="status-line">INITIALIZING...</div>
     <div id="transcript">Starting weather radio broadcast...</div>
 
     <div class="buttons">
-      <button id="btn-all"      onclick="manualSpeak('all')">&#x25B6; Full Broadcast</button>
-      <button id="btn-alerts"   onclick="manualSpeak('alerts')">Alerts</button>
-      <button id="btn-current"  onclick="manualSpeak('current')">Current</button>
-      <button id="btn-forecast" onclick="manualSpeak('forecast')">Forecast</button>
+      <button id="btn-all"      onclick="manualSpeak('all')"      disabled>&#x25B6; Full Broadcast</button>
+      <button id="btn-alerts"   onclick="manualSpeak('alerts')"   disabled>Alerts</button>
+      <button id="btn-current"  onclick="manualSpeak('current')"  disabled>Current</button>
+      <button id="btn-forecast" onclick="manualSpeak('forecast')" disabled>Forecast</button>
       <button class="stop-btn"  onclick="stopSpeech()">&#x25A0; Stop</button>
     </div>
 
@@ -157,6 +169,9 @@
     </div>
   </div>
 
+  <!-- meSpeak.js — 100% client-side eSpeak TTS, no server needed -->
+  <script src="mespeak/mespeak.js"></script>
+
 <script>
   const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxB2X7tWZt1u0bCrrjU2Azy0PN37mUftKafRm7357rkK_cag3g_jwSYdTRvQ-bnCn6s/exec";
   const BROADCAST_INTERVAL = 5;
@@ -164,12 +179,123 @@
     "Please remember that this is not related to the National Weather Service, or the National Oceanic and Atmospheric Administration. " +
     "Thank you for listening. ";
 
-  const synth = window.speechSynthesis;
   let isSpeaking = false;
   let autoTimer = null;
   let countdownTimer = null;
   let secondsUntilNext = 0;
   let userStopped = false;
+  let meSpeakReady = false;
+  let currentSpeechId = null;
+
+  // ── meSpeak init ──────────────────────────────────────────────────────────
+  function initMeSpeak() {
+    try {
+      meSpeak.loadConfig(); // no-op in v2.0+, kept for safety
+      meSpeak.loadVoice('mespeak/voices/en/en-us.json', function(success) {
+        if (success) {
+          meSpeakReady = true;
+          setEngineStatus('SPEECH ENGINE READY', 'ready');
+        } else {
+          meSpeakReady = false;
+          setEngineStatus('SPEECH ENGINE FAILED — USING FALLBACK VOICE', 'error');
+        }
+        finishInit();
+      });
+    } catch (err) {
+      console.warn('meSpeak init error:', err);
+      meSpeakReady = false;
+      setEngineStatus('SPEECH ENGINE FAILED — USING FALLBACK VOICE', 'error');
+      finishInit();
+    }
+  }
+
+  function finishInit() {
+    setButtons(false);
+    setStatus('CLICK ANYWHERE TO START', 'active');
+    setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
+    document.addEventListener('click', startOnInteraction);
+    document.addEventListener('keydown', startOnInteraction);
+  }
+
+  // ── Speak with meSpeak (klatt voice for that synthesized tone) ────────────
+  function speakWithMeSpeak(text, onDone) {
+    if (!meSpeakReady) {
+      speakWithFallback(text, onDone);
+      return;
+    }
+
+    try {
+      currentSpeechId = meSpeak.speak(text, {
+        voice: 'en-us',
+        variant: 'klatt',   // classic formant-synthesizer tone
+        speed: 150,
+        pitch: 40,
+        amplitude: 100
+      }, function(success) {
+        isSpeaking = false;
+        setStatus(success
+          ? 'BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC'
+          : 'BROADCAST INTERRUPTED', 'active');
+        setButtons(false);
+        if (onDone) onDone();
+      });
+
+      if (!currentSpeechId) {
+        // speak() returned 0 — failed immediately
+        speakWithFallback(text, onDone);
+      }
+    } catch (err) {
+      console.warn('meSpeak speak failed, falling back:', err);
+      speakWithFallback(text, onDone);
+    }
+  }
+
+  // ── Fallback browser TTS ──────────────────────────────────────────────────
+  function speakWithFallback(text, onDone) {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+    let index = 0;
+
+    function speakNext() {
+      if (index >= sentences.length) {
+        isSpeaking = false;
+        setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
+        setButtons(false);
+        if (onDone) onDone();
+        return;
+      }
+      const chunk = sentences[index].trim();
+      index++;
+      if (!chunk) { speakNext(); return; }
+
+      const utt = new SpeechSynthesisUtterance(chunk);
+      utt.rate = 0.92;
+      utt.pitch = 0.85;
+      utt.volume = 1.0;
+
+      const voices = synth.getVoices();
+      const preferred = voices.find(v => v.lang === 'en-US' && v.name.includes('Google'))
+                     || voices.find(v => v.lang === 'en-US')
+                     || voices[0];
+      if (preferred) utt.voice = preferred;
+
+      utt.onend = speakNext;
+      utt.onerror = (e) => {
+        if (e.error !== 'interrupted') speakNext();
+      };
+      synth.speak(utt);
+    }
+
+    speakNext();
+  }
+
+  // ── UI helpers ────────────────────────────────────────────────────────────
+  function setEngineStatus(msg, cls) {
+    const el = document.getElementById('engine-status');
+    el.textContent = msg;
+    el.className = cls || '';
+  }
 
   function setStatus(msg, cls) {
     const el = document.getElementById('status');
@@ -188,7 +314,8 @@
   }
 
   function stopSpeech() {
-    synth.cancel();
+    if (meSpeakReady) meSpeak.stop();
+    window.speechSynthesis.cancel();
     isSpeaking = false;
     userStopped = true;
     clearTimeout(autoTimer);
@@ -234,50 +361,13 @@
     }, BROADCAST_INTERVAL * 1000);
   }
 
-  function speakText(text, onDone) {
-    synth.cancel();
-    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
-    let index = 0;
-
-    function speakNext() {
-      if (index >= sentences.length) {
-        isSpeaking = false;
-        setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
-        setButtons(false);
-        if (onDone) onDone();
-        return;
-      }
-      const chunk = sentences[index].trim();
-      index++;
-      if (!chunk) { speakNext(); return; }
-
-      const utt = new SpeechSynthesisUtterance(chunk);
-      utt.rate   = 0.92;
-      utt.pitch  = 0.85;
-      utt.volume = 1.0;
-
-      const voices = synth.getVoices();
-      const preferred = voices.find(v => v.lang === 'en-US' && v.name.includes('Google'))
-                     || voices.find(v => v.lang === 'en-US')
-                     || voices[0];
-      if (preferred) utt.voice = preferred;
-
-      utt.onend = speakNext;
-      utt.onerror = (e) => {
-        if (e.error !== 'interrupted') speakNext();
-      };
-
-      synth.speak(utt);
-    }
-
-    speakNext();
-  }
-
+  // ── Weather fetch ─────────────────────────────────────────────────────────
   function fetchWeather(type) {
     return fetch(SCRIPT_URL + '?type=' + type)
       .then(r => r.json());
   }
 
+  // ── Broadcast logic ───────────────────────────────────────────────────────
   function runBroadcast(type, onDone) {
     isSpeaking = true;
     setButtons(true);
@@ -302,7 +392,7 @@
 
       setTranscript(fullText);
       setStatus('BROADCASTING...', 'active');
-      speakText(fullText, onDone);
+      speakWithMeSpeak(fullText, onDone);
 
     }).catch(function(err) {
       setStatus('ERROR: ' + err.message, 'error');
@@ -320,12 +410,14 @@
 
   function manualSpeak(type) {
     userStopped = false;
-    synth.cancel();
+    if (meSpeakReady) meSpeak.stop();
+    window.speechSynthesis.cancel();
     clearTimeout(autoTimer);
     clearInterval(countdownTimer);
     runBroadcast(type, function() { scheduleNext(); });
   }
 
+  // ── Start on interaction ──────────────────────────────────────────────────
   let started = false;
   function startOnInteraction() {
     if (started) return;
@@ -335,13 +427,12 @@
     document.removeEventListener('keydown', startOnInteraction);
   }
 
-  document.addEventListener('click', startOnInteraction);
-  document.addEventListener('keydown', startOnInteraction);
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  window.addEventListener('load', function() {
+    initMeSpeak();
+  });
 
-  window.speechSynthesis.onvoiceschanged = () => { synth.getVoices(); };
-
-  setStatus('CLICK ANYWHERE TO START', 'active');
-  setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
+  window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
 </script>
 </body>
 </html>
