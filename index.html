@@ -178,6 +178,9 @@
     "Please remember that this is not related to the National Weather Service, or the National Oceanic and Atmospheric Administration. " +
     "Thank you for listening. ";
 
+  // Max characters per DECtalk request — keeps the engine from choking on long text
+  const DECTALK_CHUNK_SIZE = 250;
+
   let isSpeaking = false;
   let autoTimer = null;
   let countdownTimer = null;
@@ -185,6 +188,7 @@
   let userStopped = false;
   let ttsServerReady = false;
   let currentAudio = null;
+  let stoppedMidPlayback = false;
 
   // ── Wake up the Render server (free tier sleeps after inactivity) ──────────
   function pingTTSServer() {
@@ -212,14 +216,54 @@
       });
   }
 
-  // ── DECtalk speak via Render server ─────────────────────────────────────
-  function speakWithDectalk(text, onDone) {
-    if (!ttsServerReady) {
-      speakWithFallback(text, onDone);
-      return;
+  // ── Split text into DECtalk-safe chunks, breaking on sentence boundaries ──
+  function chunkText(text, maxLen) {
+    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+    const chunks = [];
+    let current = "";
+
+    for (let sentence of sentences) {
+      sentence = sentence.trim();
+      if (!sentence) continue;
+
+      // If a single sentence is longer than maxLen, split it further on commas/spaces
+      if (sentence.length > maxLen) {
+        const words = sentence.split(" ");
+        let piece = "";
+        for (const word of words) {
+          if ((piece + " " + word).trim().length > maxLen) {
+            if (piece) chunks.push(piece.trim());
+            piece = word;
+          } else {
+            piece = (piece + " " + word).trim();
+          }
+        }
+        if (piece) {
+          if ((current + " " + piece).trim().length <= maxLen) {
+            current = (current + " " + piece).trim();
+          } else {
+            if (current) chunks.push(current);
+            current = piece;
+          }
+        }
+        continue;
+      }
+
+      if ((current + " " + sentence).trim().length <= maxLen) {
+        current = (current + " " + sentence).trim();
+      } else {
+        if (current) chunks.push(current);
+        current = sentence;
+      }
     }
 
-    fetch(TTS_SERVER_URL + '/speak', {
+    if (current) chunks.push(current);
+    return chunks;
+  }
+
+  // ── Play a single chunk's audio from the TTS server ────────────────────────
+  function playChunk(text) {
+    return fetch(TTS_SERVER_URL + '/speak', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text })
@@ -229,25 +273,46 @@
         return r.blob();
       })
       .then(blob => {
-        const url = URL.createObjectURL(blob);
-        currentAudio = new Audio(url);
-        currentAudio.onended = () => {
-          URL.revokeObjectURL(url);
-          isSpeaking = false;
-          setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
-          setButtons(false);
-          if (onDone) onDone();
-        };
-        currentAudio.onerror = () => {
-          console.warn('Audio playback failed, falling back');
-          speakWithFallback(text, onDone);
-        };
-        currentAudio.play();
-      })
-      .catch(err => {
-        console.warn('DECtalk server failed, falling back:', err);
-        speakWithFallback(text, onDone);
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(blob);
+          currentAudio = new Audio(url);
+          currentAudio.onended = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          currentAudio.onerror = (e) => {
+            URL.revokeObjectURL(url);
+            reject(e);
+          };
+          currentAudio.play().catch(reject);
+        });
       });
+  }
+
+  // ── DECtalk speak via Render server, chunked ───────────────────────────────
+  async function speakWithDectalk(text, onDone) {
+    if (!ttsServerReady) {
+      speakWithFallback(text, onDone);
+      return;
+    }
+
+    stoppedMidPlayback = false;
+    const chunks = chunkText(text, DECTALK_CHUNK_SIZE);
+    console.log('Speaking', chunks.length, 'chunks:', chunks);
+
+    try {
+      for (const chunk of chunks) {
+        if (stoppedMidPlayback) break;
+        await playChunk(chunk);
+      }
+      isSpeaking = false;
+      setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
+      setButtons(false);
+      if (onDone) onDone();
+    } catch (err) {
+      console.warn('DECtalk chunk failed, falling back:', err);
+      speakWithFallback(text, onDone);
+    }
   }
 
   // ── Fallback browser TTS ──────────────────────────────────────────────────
@@ -318,6 +383,7 @@
   }
 
   function stopSpeech() {
+    stoppedMidPlayback = true;
     if (currentAudio) {
       currentAudio.pause();
       currentAudio = null;
@@ -417,6 +483,7 @@
 
   function manualSpeak(type) {
     userStopped = false;
+    stoppedMidPlayback = true;
     if (currentAudio) { currentAudio.pause(); currentAudio = null; }
     window.speechSynthesis.cancel();
     clearTimeout(autoTimer);
