@@ -132,18 +132,6 @@
     }
 
     .cycle-info span { color: #00ccff88; }
-
-    #dectalk-status {
-      font-size: 0.7rem;
-      color: #334455;
-      text-align: center;
-      margin-bottom: 12px;
-      letter-spacing: 0.08em;
-    }
-
-    #dectalk-status.ready  { color: #00ff8877; }
-    #dectalk-status.error  { color: #ff444477; }
-    #dectalk-status.loading { color: #ffaa0077; }
   </style>
 </head>
 <body>
@@ -153,15 +141,14 @@
 
   <div class="radio-box">
     <div id="alert-banner" class="alert-banner"></div>
-    <div id="dectalk-status" class="loading">WAKING UP DECTALK SERVER...</div>
     <div id="status" class="status-line">INITIALIZING...</div>
     <div id="transcript">Starting weather radio broadcast...</div>
 
     <div class="buttons">
-      <button id="btn-all"      onclick="manualSpeak('all')"      disabled>&#x25B6; Full Broadcast</button>
-      <button id="btn-alerts"   onclick="manualSpeak('alerts')"   disabled>Alerts</button>
-      <button id="btn-current"  onclick="manualSpeak('current')"  disabled>Current</button>
-      <button id="btn-forecast" onclick="manualSpeak('forecast')" disabled>Forecast</button>
+      <button id="btn-all"      onclick="manualSpeak('all')">&#x25B6; Full Broadcast</button>
+      <button id="btn-alerts"   onclick="manualSpeak('alerts')">Alerts</button>
+      <button id="btn-current"  onclick="manualSpeak('current')">Current</button>
+      <button id="btn-forecast" onclick="manualSpeak('forecast')">Forecast</button>
       <button class="stop-btn"  onclick="stopSpeech()">&#x25A0; Stop</button>
     </div>
 
@@ -172,195 +159,17 @@
 
 <script>
   const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxB2X7tWZt1u0bCrrjU2Azy0PN37mUftKafRm7357rkK_cag3g_jwSYdTRvQ-bnCn6s/exec";
-  const TTS_SERVER_URL = "https://weather-radio-tts.onrender.com";
   const BROADCAST_INTERVAL = 5;
   const DISCLAIMER = "This is a fanmade NOAA weather radio, broadcasting off of Google Apps Script. " +
     "Please remember that this is not related to the National Weather Service, or the National Oceanic and Atmospheric Administration. " +
     "Thank you for listening. ";
 
-  // Max characters per DECtalk request — keeps the engine from choking on long text
-  const DECTALK_CHUNK_SIZE = 250;
-
+  const synth = window.speechSynthesis;
   let isSpeaking = false;
   let autoTimer = null;
   let countdownTimer = null;
   let secondsUntilNext = 0;
   let userStopped = false;
-  let ttsServerReady = false;
-  let currentAudio = null;
-  let stoppedMidPlayback = false;
-
-  // ── Wake up the Render server (free tier sleeps after inactivity) ──────────
-  function pingTTSServer() {
-    setDectalkStatus('WAKING UP DECTALK SERVER...', 'loading');
-    fetch(TTS_SERVER_URL)
-      .then(r => {
-        if (r.ok) {
-          ttsServerReady = true;
-          setDectalkStatus('DECTALK SERVER READY', 'ready');
-        } else {
-          throw new Error('Server returned ' + r.status);
-        }
-      })
-      .catch(err => {
-        console.warn('TTS server not ready yet:', err);
-        ttsServerReady = false;
-        setDectalkStatus('DECTALK SERVER UNAVAILABLE — USING FALLBACK VOICE', 'error');
-      })
-      .finally(() => {
-        enableButtons();
-        setStatus('CLICK ANYWHERE TO START', 'active');
-        setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
-        document.addEventListener('click', startOnInteraction);
-        document.addEventListener('keydown', startOnInteraction);
-      });
-  }
-
-  // ── Split text into DECtalk-safe chunks, breaking on sentence boundaries ──
-  function chunkText(text, maxLen) {
-    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
-    const chunks = [];
-    let current = "";
-
-    for (let sentence of sentences) {
-      sentence = sentence.trim();
-      if (!sentence) continue;
-
-      // If a single sentence is longer than maxLen, split it further on commas/spaces
-      if (sentence.length > maxLen) {
-        const words = sentence.split(" ");
-        let piece = "";
-        for (const word of words) {
-          if ((piece + " " + word).trim().length > maxLen) {
-            if (piece) chunks.push(piece.trim());
-            piece = word;
-          } else {
-            piece = (piece + " " + word).trim();
-          }
-        }
-        if (piece) {
-          if ((current + " " + piece).trim().length <= maxLen) {
-            current = (current + " " + piece).trim();
-          } else {
-            if (current) chunks.push(current);
-            current = piece;
-          }
-        }
-        continue;
-      }
-
-      if ((current + " " + sentence).trim().length <= maxLen) {
-        current = (current + " " + sentence).trim();
-      } else {
-        if (current) chunks.push(current);
-        current = sentence;
-      }
-    }
-
-    if (current) chunks.push(current);
-    return chunks;
-  }
-
-  // ── Play a single chunk's audio from the TTS server ────────────────────────
-  function playChunk(text) {
-    return fetch(TTS_SERVER_URL + '/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text })
-    })
-      .then(r => {
-        if (!r.ok) throw new Error('TTS server error ' + r.status);
-        return r.blob();
-      })
-      .then(blob => {
-        return new Promise((resolve, reject) => {
-          const url = URL.createObjectURL(blob);
-          currentAudio = new Audio(url);
-          currentAudio.onended = () => {
-            URL.revokeObjectURL(url);
-            resolve();
-          };
-          currentAudio.onerror = (e) => {
-            URL.revokeObjectURL(url);
-            reject(e);
-          };
-          currentAudio.play().catch(reject);
-        });
-      });
-  }
-
-  // ── DECtalk speak via Render server, chunked ───────────────────────────────
-  async function speakWithDectalk(text, onDone) {
-    if (!ttsServerReady) {
-      speakWithFallback(text, onDone);
-      return;
-    }
-
-    stoppedMidPlayback = false;
-    const chunks = chunkText(text, DECTALK_CHUNK_SIZE);
-    console.log('Speaking', chunks.length, 'chunks:', chunks);
-
-    try {
-      for (const chunk of chunks) {
-        if (stoppedMidPlayback) break;
-        await playChunk(chunk);
-      }
-      isSpeaking = false;
-      setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
-      setButtons(false);
-      if (onDone) onDone();
-    } catch (err) {
-      console.warn('DECtalk chunk failed, falling back:', err);
-      speakWithFallback(text, onDone);
-    }
-  }
-
-  // ── Fallback browser TTS ──────────────────────────────────────────────────
-  function speakWithFallback(text, onDone) {
-    const synth = window.speechSynthesis;
-    synth.cancel();
-    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
-    let index = 0;
-
-    function speakNext() {
-      if (index >= sentences.length) {
-        isSpeaking = false;
-        setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
-        setButtons(false);
-        if (onDone) onDone();
-        return;
-      }
-      const chunk = sentences[index].trim();
-      index++;
-      if (!chunk) { speakNext(); return; }
-
-      const utt = new SpeechSynthesisUtterance(chunk);
-      utt.rate = 0.92;
-      utt.pitch = 0.85;
-      utt.volume = 1.0;
-
-      const voices = synth.getVoices();
-      const preferred = voices.find(v => v.lang === 'en-US' && v.name.includes('Google'))
-                     || voices.find(v => v.lang === 'en-US')
-                     || voices[0];
-      if (preferred) utt.voice = preferred;
-
-      utt.onend = speakNext;
-      utt.onerror = (e) => {
-        if (e.error !== 'interrupted') speakNext();
-      };
-      synth.speak(utt);
-    }
-
-    speakNext();
-  }
-
-  // ── UI helpers ────────────────────────────────────────────────────────────
-  function setDectalkStatus(msg, cls) {
-    const el = document.getElementById('dectalk-status');
-    el.textContent = msg;
-    el.className = cls || '';
-  }
 
   function setStatus(msg, cls) {
     const el = document.getElementById('status');
@@ -378,17 +187,8 @@
     document.querySelectorAll('button:not(.stop-btn)').forEach(b => b.disabled = disabled);
   }
 
-  function enableButtons() {
-    setButtons(false);
-  }
-
   function stopSpeech() {
-    stoppedMidPlayback = true;
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio = null;
-    }
-    window.speechSynthesis.cancel();
+    synth.cancel();
     isSpeaking = false;
     userStopped = true;
     clearTimeout(autoTimer);
@@ -434,13 +234,50 @@
     }, BROADCAST_INTERVAL * 1000);
   }
 
-  // ── Weather fetch ─────────────────────────────────────────────────────────
+  function speakText(text, onDone) {
+    synth.cancel();
+    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+    let index = 0;
+
+    function speakNext() {
+      if (index >= sentences.length) {
+        isSpeaking = false;
+        setStatus('BROADCAST COMPLETE — NEXT CYCLE IN ' + BROADCAST_INTERVAL + ' SEC', 'active');
+        setButtons(false);
+        if (onDone) onDone();
+        return;
+      }
+      const chunk = sentences[index].trim();
+      index++;
+      if (!chunk) { speakNext(); return; }
+
+      const utt = new SpeechSynthesisUtterance(chunk);
+      utt.rate   = 0.92;
+      utt.pitch  = 0.85;
+      utt.volume = 1.0;
+
+      const voices = synth.getVoices();
+      const preferred = voices.find(v => v.lang === 'en-US' && v.name.includes('Google'))
+                     || voices.find(v => v.lang === 'en-US')
+                     || voices[0];
+      if (preferred) utt.voice = preferred;
+
+      utt.onend = speakNext;
+      utt.onerror = (e) => {
+        if (e.error !== 'interrupted') speakNext();
+      };
+
+      synth.speak(utt);
+    }
+
+    speakNext();
+  }
+
   function fetchWeather(type) {
     return fetch(SCRIPT_URL + '?type=' + type)
       .then(r => r.json());
   }
 
-  // ── Broadcast logic ───────────────────────────────────────────────────────
   function runBroadcast(type, onDone) {
     isSpeaking = true;
     setButtons(true);
@@ -465,7 +302,7 @@
 
       setTranscript(fullText);
       setStatus('BROADCASTING...', 'active');
-      speakWithDectalk(fullText, onDone);
+      speakText(fullText, onDone);
 
     }).catch(function(err) {
       setStatus('ERROR: ' + err.message, 'error');
@@ -483,15 +320,12 @@
 
   function manualSpeak(type) {
     userStopped = false;
-    stoppedMidPlayback = true;
-    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-    window.speechSynthesis.cancel();
+    synth.cancel();
     clearTimeout(autoTimer);
     clearInterval(countdownTimer);
     runBroadcast(type, function() { scheduleNext(); });
   }
 
-  // ── Start on interaction ──────────────────────────────────────────────────
   let started = false;
   function startOnInteraction() {
     if (started) return;
@@ -501,12 +335,13 @@
     document.removeEventListener('keydown', startOnInteraction);
   }
 
-  // ── Boot ──────────────────────────────────────────────────────────────────
-  window.addEventListener('load', function() {
-    pingTTSServer();
-  });
+  document.addEventListener('click', startOnInteraction);
+  document.addEventListener('keydown', startOnInteraction);
 
-  window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
+  window.speechSynthesis.onvoiceschanged = () => { synth.getVoices(); };
+
+  setStatus('CLICK ANYWHERE TO START', 'active');
+  setTranscript('Weather radio ready. Click anywhere on the page to begin the auto-broadcast.');
 </script>
 </body>
 </html>
