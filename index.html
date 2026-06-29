@@ -191,7 +191,7 @@
   function initMeSpeak() {
     try {
       meSpeak.loadConfig(); // no-op in v2.0+, kept for safety
-      meSpeak.loadVoice('voices/en/en-us.json', function(success) {
+      meSpeak.loadVoice('en-us', function(success) {
         if (success) {
           meSpeakReady = true;
           setEngineStatus('SPEECH ENGINE READY', 'ready');
