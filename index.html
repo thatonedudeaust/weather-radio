@@ -123,6 +123,18 @@
       letter-spacing: 0.05em;
     }
 
+    .manual-banner {
+      display: none;
+      background: #1a001a;
+      border: 1px solid #ff00ff44;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      color: #ff88ff;
+      margin-bottom: 16px;
+      letter-spacing: 0.05em;
+    }
+
     .cycle-info {
       font-size: 0.7rem;
       color: #334455;
@@ -151,6 +163,7 @@
   <div class="subtitle">KIH28 — MOUNT HOLLY, NJ &nbsp;|&nbsp; NJZ015/016/017</div>
 
   <div class="radio-box">
+    <div id="manual-banner" class="manual-banner"></div>
     <div id="alert-banner" class="alert-banner"></div>
     <div id="engine-status">LOADING SPEECH ENGINE...</div>
     <div id="status" class="status-line">INITIALIZING...</div>
@@ -186,19 +199,14 @@
   let meSpeakReady = false;
   let currentSpeechId = null;
 
-  // ── meSpeak init ──────────────────────────────────────────────────────────
   function initMeSpeak() {
     try {
-      // loadConfig is fire-and-forget in v2.0, no callback
       meSpeak.loadConfig(
         'https://thatonedudeaust.github.io/weather-radio/mespeak/mespeak_config.json'
       );
-
-      // loadVoice does have a callback
       meSpeak.loadVoice(
         'https://thatonedudeaust.github.io/weather-radio/mespeak/en-us.json',
         function(success, id) {
-          console.log('loadVoice callback:', success, id);
           if (success) {
             meSpeakReady = true;
             setEngineStatus('SPEECH ENGINE READY', 'ready');
@@ -230,7 +238,6 @@
       speakWithFallback(text, onDone);
       return;
     }
-
     try {
       currentSpeechId = meSpeak.speak(text, {
         voice: 'en-us',
@@ -246,12 +253,8 @@
         setButtons(false);
         if (onDone) onDone();
       });
-
-      if (!currentSpeechId) {
-        speakWithFallback(text, onDone);
-      }
+      if (!currentSpeechId) speakWithFallback(text, onDone);
     } catch (err) {
-      console.warn('meSpeak speak failed, falling back:', err);
       speakWithFallback(text, onDone);
     }
   }
@@ -286,9 +289,7 @@
       if (preferred) utt.voice = preferred;
 
       utt.onend = speakNext;
-      utt.onerror = (e) => {
-        if (e.error !== 'interrupted') speakNext();
-      };
+      utt.onerror = (e) => { if (e.error !== 'interrupted') speakNext(); };
       synth.speak(utt);
     }
 
@@ -339,6 +340,16 @@
     }
   }
 
+  function showManualBanner(text) {
+    const banner = document.getElementById('manual-banner');
+    if (text) {
+      banner.textContent = '📢 MANUAL ALERT ACTIVE';
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
   function startCountdown(seconds) {
     clearInterval(countdownTimer);
     secondsUntilNext = seconds;
@@ -366,8 +377,7 @@
   }
 
   function fetchWeather(type) {
-    return fetch(SCRIPT_URL + '?type=' + type)
-      .then(r => r.json());
+    return fetch(SCRIPT_URL + '?type=' + type).then(r => r.json());
   }
 
   function runBroadcast(type, onDone) {
@@ -383,10 +393,19 @@
 
       if (type === 'all') {
         showAlertBanner(data.alerts ? data.alerts.alerts : []);
+        showManualBanner(data.manual ? data.manual.alert : null);
+
         fullText = DISCLAIMER + "Mount Holly, New Jersey. ";
+
+        // Manual alert goes FIRST and most prominent
+        if (data.manual && data.manual.alert) {
+          fullText += data.manual.alert + " ";
+        }
+
         if (data.current  && data.current.tts)  fullText += data.current.tts  + " ";
         if (data.alerts   && data.alerts.tts)   fullText += data.alerts.tts   + " ";
         if (data.forecast && data.forecast.tts) fullText += data.forecast.tts;
+
       } else {
         if (type === 'alerts') showAlertBanner(data.alerts);
         fullText = DISCLAIMER + (data.tts || "No information available.");
@@ -428,10 +447,7 @@
     document.removeEventListener('keydown', startOnInteraction);
   }
 
-  window.addEventListener('load', function() {
-    initMeSpeak();
-  });
-
+  window.addEventListener('load', function() { initMeSpeak(); });
   window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
 </script>
 </body>
