@@ -189,32 +189,24 @@
   // ── meSpeak init ──────────────────────────────────────────────────────────
   function initMeSpeak() {
     try {
-      // Step 1: load config first (required in v2.0)
+      // loadConfig is fire-and-forget in v2.0, no callback
       meSpeak.loadConfig(
-        'https://thatonedudeaust.github.io/weather-radio/mespeak/mespeak_config.json',
-        function(success) {
-          console.log('loadConfig callback:', success);
-          if (!success) {
+        'https://thatonedudeaust.github.io/weather-radio/mespeak/mespeak_config.json'
+      );
+
+      // loadVoice does have a callback
+      meSpeak.loadVoice(
+        'https://thatonedudeaust.github.io/weather-radio/mespeak/en-us.json',
+        function(success, id) {
+          console.log('loadVoice callback:', success, id);
+          if (success) {
+            meSpeakReady = true;
+            setEngineStatus('SPEECH ENGINE READY', 'ready');
+          } else {
             meSpeakReady = false;
             setEngineStatus('SPEECH ENGINE FAILED — USING FALLBACK VOICE', 'error');
-            finishInit();
-            return;
           }
-          // Step 2: load voice after config succeeds
-          meSpeak.loadVoice(
-            'https://thatonedudeaust.github.io/weather-radio/mespeak/en-us.json',
-            function(success, id) {
-              console.log('loadVoice callback:', success, id);
-              if (success) {
-                meSpeakReady = true;
-                setEngineStatus('SPEECH ENGINE READY', 'ready');
-              } else {
-                meSpeakReady = false;
-                setEngineStatus('SPEECH ENGINE FAILED — USING FALLBACK VOICE', 'error');
-              }
-              finishInit();
-            }
-          );
+          finishInit();
         }
       );
     } catch (err) {
