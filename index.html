@@ -186,10 +186,10 @@
   let meSpeakReady = false;
   let currentSpeechId = null;
 
-  // ── meSpeak init — fetch voice ourselves to bypass meSpeak's broken path logic ──
+  // ── meSpeak init — absolute URL so path logic can't mangle it ────────────
   function initMeSpeak() {
     try {
-      fetch('mespeak/voices/en/en-us.json')
+      fetch('https://thatonedudeaust.github.io/weather-radio/mespeak/voices/en/en-us.json')
         .then(r => r.json())
         .then(voiceData => {
           meSpeak.loadVoice(voiceData, function(success) {
@@ -368,13 +368,11 @@
     }, BROADCAST_INTERVAL * 1000);
   }
 
-  // ── Weather fetch ─────────────────────────────────────────────────────────
   function fetchWeather(type) {
     return fetch(SCRIPT_URL + '?type=' + type)
       .then(r => r.json());
   }
 
-  // ── Broadcast logic ───────────────────────────────────────────────────────
   function runBroadcast(type, onDone) {
     isSpeaking = true;
     setButtons(true);
@@ -424,7 +422,6 @@
     runBroadcast(type, function() { scheduleNext(); });
   }
 
-  // ── Start on interaction ──────────────────────────────────────────────────
   let started = false;
   function startOnInteraction() {
     if (started) return;
@@ -434,7 +431,6 @@
     document.removeEventListener('keydown', startOnInteraction);
   }
 
-  // ── Boot ──────────────────────────────────────────────────────────────────
   window.addEventListener('load', function() {
     initMeSpeak();
   });
