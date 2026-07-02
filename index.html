@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mount Holly, KIH28 Weather Radio</title>
+  <title>Mount Holly KIH28 Weather Radio</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -186,10 +186,9 @@
   let meSpeakReady = false;
   let currentSpeechId = null;
 
-  // ── meSpeak init — absolute URL so path logic can't mangle it ────────────
   function initMeSpeak() {
     try {
-      fetch('https://thatonedudeaust.github.io/weather-radio/mespeak/voices/en/en-us.json')
+      fetch('https://thatonedudeaust.github.io/weather-radio/mespeak/en-us.json')
         .then(r => r.json())
         .then(voiceData => {
           meSpeak.loadVoice(voiceData, function(success) {
@@ -225,7 +224,6 @@
     document.addEventListener('keydown', startOnInteraction);
   }
 
-  // ── Speak with meSpeak (klatt voice for that synthesized tone) ────────────
   function speakWithMeSpeak(text, onDone) {
     if (!meSpeakReady) {
       speakWithFallback(text, onDone);
@@ -257,7 +255,6 @@
     }
   }
 
-  // ── Fallback browser TTS ──────────────────────────────────────────────────
   function speakWithFallback(text, onDone) {
     const synth = window.speechSynthesis;
     synth.cancel();
@@ -297,7 +294,6 @@
     speakNext();
   }
 
-  // ── UI helpers ────────────────────────────────────────────────────────────
   function setEngineStatus(msg, cls) {
     const el = document.getElementById('engine-status');
     el.textContent = msg;
